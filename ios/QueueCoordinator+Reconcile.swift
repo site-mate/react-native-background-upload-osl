@@ -17,10 +17,20 @@ extension QueueCoordinator {
       self.transport.allTasks { tasks in
         self.queue.async {
           self.reconcile(tasks)
-          self.whenGraceEnds(completion)
+          self.whenGraceEnds {
+            completion()
+            self.sweepUnclaimedFiles()
+          }
         }
       }
     }
+  }
+
+  /// Staged files no stored entry claims. After every grace wait, so a replay has
+  /// settled what it will; on this queue, so no enqueue of this process is mid-write.
+  private func sweepUnclaimedFiles() {
+    for e in index.entries() where !e.legacy { store.sweep(e) }
+    store.sweepEntryless()
   }
 
   /// One open grace wait: the TaskMap keys whose completion may still

@@ -359,6 +359,54 @@ final class CoordinatorRelaunchTests: XCTestCase {
     XCTAssertTrue(released)
   }
 
+  func testRelaunchSweepsABodyWhoseEnqueueNeverSaved() throws {
+    h.boot()
+    writeFile(h.store.fileURL("ghost", "body-1.tmp"), bytes: 1024)
+    writeFile(h.store.fileURL("ghost", "body-2"), bytes: 10)
+    let stuck = h.store.fileURL("stuck", "body-3.tmp")
+    writeFile(stuck, bytes: 10)
+    setReadOnly(h.store.dir("stuck"), true)
+    defer { setReadOnly(h.store.dir("stuck"), false) }
+    _ = try h.enqueue(h.dataRaw(id: "a")).get()
+    h.map.removeKey(h.transport.live[0].key)
+    let fresh = Harness(root: h.root)
+    fresh.boot()
+    XCTAssertFalse(FileIO.exists(fresh.store.dir("ghost")))
+    XCTAssertTrue(FileIO.exists(stuck), "a removal that fails is skipped")
+    XCTAssertEqual(fresh.transport.live.count, 1, "and the upload is sent regardless")
+  }
+
+  func testRelaunchKeepsTheBodyOfALiveEntryAndSweepsItsStrays() throws {
+    _ = try h.enqueue(h.dataRaw(id: "a")).get() // not ready: no task yet
+    let body = try XCTUnwrap(h.store.bodyURL(XCTUnwrap(h.entry("a"))))
+    let strays = ["body-new.tmp", "body-old"].map { h.store.fileURL("a", $0) }
+    strays.forEach { writeFile($0, bytes: 10) }
+    let fresh = Harness(root: h.root)
+    fresh.boot()
+    XCTAssertTrue(FileIO.exists(body))
+    XCTAssertFalse(strays.contains(where: FileIO.exists))
+    XCTAssertEqual(fresh.transport.live.map(\.file), [body])
+  }
+
+  func testRelaunchSweepWaitsOutTheGraceAndKeepsItsEntryBody() throws {
+    h.boot()
+    _ = try h.enqueue(h.dataRaw(id: "a")).get()
+    let body = try XCTUnwrap(h.store.bodyURL(XCTUnwrap(h.entry("a"))))
+    let orphan = h.store.fileURL("ghost", "body-1.tmp")
+    writeFile(orphan, bytes: 10)
+    let fresh = Harness(root: h.root) // a's key is there, its task is not
+    fresh.boot()
+    XCTAssertTrue(fresh.transport.created.isEmpty, "in the grace")
+    XCTAssertTrue(FileIO.exists(orphan), "no sweep while a replay may still come")
+    _ = try fresh.enqueue(fresh.dataRaw(id: "b")).get()
+    let staged = try XCTUnwrap(fresh.store.bodyURL(XCTUnwrap(fresh.entry("b"))))
+    fresh.advance(Double(QueueCoordinator.graceMs))
+    XCTAssertFalse(FileIO.exists(orphan))
+    XCTAssertTrue(FileIO.exists(body))
+    XCTAssertTrue(FileIO.exists(staged), "a body this process staged is never swept")
+    XCTAssertTrue(fresh.transport.live.contains { $0.file == body }, "a is sent again from its body")
+  }
+
   func testUnownedAndStaleTasksAreCancelled() throws {
     let v9 = FakeTask(key: "any:90", description: "bare-v9-id")
     let orphan = FakeTask(key: "any:91", description: ChunkedEngine.taskDescription(id: "gone", attempt: 1, generation: 1))

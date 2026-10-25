@@ -130,7 +130,25 @@ final class QueueStore {
           || name == ChunkedManifestV9.blobName
         let stalePart = name.hasPrefix("part-") && !name.contains(".\(entry.incarnation).")
         if (isBody && name != entry.bodyPath) || name.hasSuffix(".tmp") || stalePart {
-          try? FileManager.default.removeItem(at: file)
+          removeLogged(file)
+        }
+      }
+    }
+  }
+
+  /// A directory with no entry.json is an enqueue that died before its save.
+  /// A blob stays for a same-id retry to adopt; a v9 manifest's directory stays whole.
+  func sweepEntryless() {
+    queue.sync {
+      for d in subdirectories() {
+        let names = files(in: d).map(\.lastPathComponent)
+        guard !names.contains(Self.entryName), !names.contains(Self.manifestName) else { continue }
+        for name in names
+        where name.hasPrefix(BodyStaging.bodyPrefix) || name.hasPrefix("part-") || name.hasSuffix(".tmp") {
+          removeLogged(d.appendingPathComponent(name))
+        }
+        if Foundation.rmdir(d.path) != 0 && errno != ENOTEMPTY {
+          NSLog("[RNFileUploader] sweep: cannot remove \(d.lastPathComponent): errno \(errno)")
         }
       }
     }
@@ -257,6 +275,14 @@ final class QueueStore {
     where file.lastPathComponent.hasPrefix("part-\(index).")
       && file.lastPathComponent != keeping?.lastPathComponent {
       try? FileManager.default.removeItem(at: file)
+    }
+  }
+
+  private func removeLogged(_ file: URL) {
+    do {
+      try FileManager.default.removeItem(at: file)
+    } catch {
+      NSLog("[RNFileUploader] sweep: cannot remove \(file.lastPathComponent): \(error.localizedDescription)")
     }
   }
 

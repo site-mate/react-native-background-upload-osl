@@ -1,3 +1,10 @@
+## Unreleased
+
+iOS removes staged bodies that no entry claims at launch, once reconcile's
+grace waits end. A process killed while `mutate()` was staging a body, before
+the entry saved, left that body on disk for good. A chunked file already
+moved into an entry-less directory stays, for a same-id `mutate()` to adopt.
+
 ## 11.0.1
 
 iOS waits two seconds after the app becomes active before replacing

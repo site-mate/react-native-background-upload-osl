@@ -74,6 +74,23 @@ final class QueueStoreTests: XCTestCase {
     XCTAssertEqual(left, ["entry.json", "body-new", "part-0.inc-1.0-5"])
   }
 
+  func testSweepEntrylessKeepsBlobsManifestsAndEntries() throws {
+    func left(_ id: String) throws -> Set<String> {
+      Set(try FileManager.default.contentsOfDirectory(atPath: store.dir(id).path))
+    }
+    for name in ["body-x.tmp", "body-y", "part-0.inc-1.0-5", "part-0.tmp"] { writeFile(store.fileURL("dead", name), "x") }
+    for name in ["blob-1", "body-z.tmp"] { writeFile(store.fileURL("moved", name), "x") }
+    for name in [QueueStore.manifestName, "blob", "part-1.v9inc.0-5"] { writeFile(store.fileURL("v9", name), "x") }
+    try store.save(entry("live"))
+    for name in ["body-a", "body-b.tmp"] { writeFile(store.fileURL("live", name), "x") }
+    store.sweepEntryless()
+    XCTAssertFalse(FileIO.exists(store.dir("dead")))
+    XCTAssertEqual(try left("moved"), ["blob-1"])
+    XCTAssertEqual(store.adoptableBlob("moved"), "blob-1", "a same-id retry still adopts it")
+    XCTAssertEqual(try left("v9"), [QueueStore.manifestName, "blob", "part-1.v9inc.0-5"])
+    XCTAssertEqual(try left("live"), [QueueStore.entryName, "body-a", "body-b.tmp"], "an entry's own sweep owns these")
+  }
+
   func testAdoptableBlobOnlyWithoutEntry() throws {
     writeFile(store.fileURL("c", "blob-123"), "bytes")
     XCTAssertEqual(store.adoptableBlob("c"), "blob-123")
