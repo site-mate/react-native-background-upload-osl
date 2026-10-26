@@ -5,6 +5,71 @@ background `URLSession`; on Android it uses `WorkManager` (a `CoroutineWorker`)
 with OkHttp. Uploads continue while the app is backgrounded and resume after it
 is killed.
 
+# Sitemate fork
+
+This is Sitemate's fork of [openspacelabs/react-native-background-upload](https://github.com/openspacelabs/react-native-background-upload).
+Upstream is the source of truth; everything here is upstream's code plus a small
+number of Sitemate patches carried on top.
+
+## Versioning
+
+Upstream releases keep their own tags untouched. A Sitemate build is tagged with
+the upstream release it is based on plus an `-sm.N` suffix:
+
+```
+v11.0.1        upstream, unmodified
+v11.0.1-sm.1   upstream v11.0.1 + Sitemate patches
+v11.0.1-sm.2   the next Sitemate patch on the same upstream base
+v11.1.0        upstream's next release
+v11.1.0-sm.1   Sitemate patches carried onto it
+```
+
+`package.json` carries the same string, so `npm ls` and `Podfile.lock` report
+`11.0.1-sm.1` rather than a bare upstream version. Without that bump a patched
+build is indistinguishable from plain upstream in a lockfile.
+
+The suffix is a valid semver prerelease, and it can never collide with a tag
+upstream might publish later.
+
+## Pinning
+
+Consumers pin by tag:
+
+```json
+"react-native-background-upload": "github:site-mate/react-native-background-upload-osl#v11.0.1-sm.1"
+```
+
+A tag is a label and can in principle be moved, so a pin resolves to whatever it
+points at when the install runs. Pin a commit SHA instead if a build needs to be
+reproducible beyond doubt.
+
+Note the npm package name and the podspec name are still
+`react-native-background-upload`, the same as the previous fork. Two forks cannot
+be installed in one app: they collide on the package name, the podspec name, and
+the Android native module name.
+
+## Keeping up to date with upstream
+
+Upstream is a remote, so a new release merges normally:
+
+```sh
+git remote add upstream https://github.com/openspacelabs/react-native-background-upload.git
+git fetch upstream
+git merge upstream/master          # or a release tag
+```
+
+Conflicts appear only where a Sitemate patch genuinely overlaps upstream's work.
+
+## Sitemate patches
+
+Each patch is kept as its own commit on top of the upstream base, rather than
+squashed in. That keeps it reviewable, lets it be offered upstream as a pull
+request, and lets it be dropped cleanly if upstream accepts an equivalent fix.
+
+| Patch | Since | Why |
+| --- | --- | --- |
+| Sweep staged bodies no entry claims at iOS relaunch | `v11.0.1-sm.1` | A kill between staging a chunked upload's body and committing its entry left a full-size file in the app's container that nothing would ever reclaim. |
+
 # Installation
 
 **Requires React Native ≥ 0.84 with the New Architecture enabled, and React ≥ 19.**
