@@ -25,6 +25,7 @@ internal class FakeHost(var clock: Long = 10_000L) : TransferHost {
   var network = ArrayDeque<Connectivity>()
   var timeout = false
   var foregroundError: Throwable? = null
+  var setForeground: (suspend () -> Unit)? = null
   /** The wifiOnly value of every connectivity check, in order. */
   val wifiChecks = mutableListOf<Boolean>()
 
@@ -48,6 +49,7 @@ internal class FakeHost(var clock: Long = 10_000L) : TransferHost {
 
   override suspend fun foreground(entry: QueueEntry) {
     foregroundError?.let { throw it }
+    setForeground?.let { enterForeground(start = it) }
   }
 
   override fun progressStarted(id: String, total: Long, sent: Long) {
@@ -452,6 +454,28 @@ class EntryRunTest {
     assertEquals("20-29", byUrl["https://example.com/part?start=20"]!!.headers["Content-Range"])
     assertEquals(10L, byUrl["https://example.com/part?start=20"]!!.body!!.contentLength())
     assertEquals(listOf(0, 1, 2), host.attempts.map { it.partIndex }.sortedBy { it })
+  }
+
+  @Test
+  fun `a foreground start refused for the dataSync quota leaves the upload running`() {
+    chunked()
+    host.setForeground = {
+      throw IllegalStateException("Time limit already exhausted for foreground service type dataSync")
+    }
+    run()
+    val e = store.load("e1")!!
+    assertEquals(EntryState.COMPLETED, e.state)
+    assertTrue(e.descriptor!!.parts!!.all { it.accepted })
+    assertEquals(EventJournal.KIND_COMPLETED, outcome().kind)
+  }
+
+  @Test
+  fun `a stop that lands during the foreground start still stops the run`() {
+    chunked()
+    host.setForeground = { throw CancellationException("stopped") }
+    assertThrows(CancellationException::class.java) { run() }
+    assertEquals(EntryState.QUEUED, store.load("e1")!!.state)
+    assertEquals(emptyList<TransferRequest>(), host.requests)
   }
 
   @Test

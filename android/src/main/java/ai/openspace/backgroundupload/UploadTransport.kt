@@ -15,6 +15,11 @@ import java.util.concurrent.TimeUnit
 private const val REQUEST_TIMEOUT = 24L
 private val REQUEST_TIMEOUT_UNIT = TimeUnit.HOURS
 
+// OkHttp's 10s read/write default fails a part a slow link is still draining.
+// Ten minutes of silence still ends a dead socket long before the call timeout.
+private const val SOCKET_TIMEOUT = 10L
+private val SOCKET_TIMEOUT_UNIT = TimeUnit.MINUTES
+
 // The number of requests transmitting at one time across ALL uploads, chunked
 // parts included. This is the design's library-wide cap of 4. Every request,
 // a simple upload or a chunked part, must pass this semaphore. Thus on
@@ -26,4 +31,6 @@ internal val transferSemaphore = Semaphore(MAX_TRANSFER_CONCURRENCY)
 // Use Okhttp as it provides the most standard behaviors even though it's not coroutine friendly
 internal val uploadHttpClient = OkHttpClient.Builder()
   .callTimeout(REQUEST_TIMEOUT, REQUEST_TIMEOUT_UNIT)
+  .readTimeout(SOCKET_TIMEOUT, SOCKET_TIMEOUT_UNIT)
+  .writeTimeout(SOCKET_TIMEOUT, SOCKET_TIMEOUT_UNIT)
   .build()

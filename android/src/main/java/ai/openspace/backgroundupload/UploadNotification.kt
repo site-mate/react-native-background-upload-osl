@@ -14,6 +14,7 @@ import android.os.Build
 import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.work.ForegroundInfo
+import kotlinx.coroutines.CancellationException
 
 // This file builds the progress notification and probes connectivity. The
 // simple and chunked workers share it. All uploads share one notification,
@@ -126,6 +127,23 @@ internal fun isForegroundStartDenied(error: Throwable): Boolean {
   // Foreground- and BackgroundServiceStartNotAllowedException.
   return generateSequence(error) { it.cause }
     .any { it is android.app.ServiceStartNotAllowedException }
+}
+
+/**
+ * Runs [start], the worker's setForeground. A refused or failed start, the
+ * dataSync daily quota included, leaves the run going without foreground mode.
+ */
+internal suspend fun enterForeground(
+  denied: (Throwable) -> Boolean = ::isForegroundStartDenied,
+  start: suspend () -> Unit,
+) {
+  try {
+    start()
+  } catch (error: CancellationException) {
+    throw error
+  } catch (error: Throwable) {
+    if (!denied(error)) Diag.warn("foreground start failed; running without it", error)
+  }
 }
 
 private fun openAppIntent(context: Context): PendingIntent? {

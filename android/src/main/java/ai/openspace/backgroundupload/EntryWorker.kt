@@ -122,13 +122,9 @@ open class EntryWorker(protected val context: Context, params: WorkerParameters)
   // goes on.
   private suspend fun startForeground() {
     if (!showsNotification) return
-    try {
+    enterForeground {
       ensureNotificationChannel(notificationManager, config)
       setForeground(getForegroundInfo())
-    } catch (error: CancellationException) {
-      throw error
-    } catch (error: Throwable) {
-      if (!isForegroundStartDenied(error)) Diag.warn("foreground start failed; running without it", error)
     }
   }
 

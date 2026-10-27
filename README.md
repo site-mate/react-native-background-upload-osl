@@ -69,6 +69,7 @@ request, and lets it be dropped cleanly if upstream accepts an equivalent fix.
 | Patch | Since | Why |
 | --- | --- | --- |
 | Sweep staged bodies no entry claims at iOS relaunch | `v11.0.1-sm.1` | A kill between staging a chunked upload's body and committing its entry left a full-size file in the app's container that nothing would ever reclaim. |
+| Android: socket timeouts a slow link survives; foreground quota denial covered | `v11.0.1-sm.2` | OkHttp's 10 s read timeout failed every part of a large upload on a throttled link, and each part restarted forever. Those retries then used up Android 15's daily `dataSync` foreground allowance. |
 
 # Installation
 
@@ -271,7 +272,9 @@ then has JobScheduler's limit of about 10 minutes. A single body (`data`,
 `form`, `file`) that does not finish in that time starts again from byte 0
 at the next run, after a growing backoff. A body that needs more than
 10 minutes headless cannot finish that way. Use `parts` for large bodies:
-accepted parts are kept across runs. iOS has no equal limit.
+accepted parts are kept across runs. iOS has no equal limit. Android 15
+also caps `dataSync` foreground services per day; once that allowance is
+used up, runs go on the same way, headless.
 
 **Backups.** The queue store (`files/rnbgupload-chunked/`) and the journal
 (`files/rnbgupload-settled/`) hold request headers, including auth tokens,
