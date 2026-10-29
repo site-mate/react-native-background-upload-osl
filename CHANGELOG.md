@@ -5,6 +5,30 @@ grace waits end. A process killed while `mutate()` was staging a body, before
 the entry saved, left that body on disk for good. A chunked file already
 moved into an entry-less directory stays, for a same-id `mutate()` to adopt.
 
+## 11.1.0
+
+Added `takeDiagnostics()`. On Android it returns the module's recent
+warnings and errors, including ones from background runs with no JS, and a
+snapshot of the queue and its WorkManager runs each time the module starts.
+Before, these went to logcat only. iOS returns an empty list.
+
+Added `priority` to the request descriptor. On Android, normal requests now
+use at most 3 of the 4 transmit slots, and the fourth is kept for requests
+with `priority: 'high'`. A small request then no longer waits behind a
+backlog of file parts. iOS ignores the field for now.
+
+## 11.0.2
+
+Android no longer lets stale wakes stop the queue. A parked entry got a wake
+at its expiry, which for long-lived requests is years ahead, and the wake
+stayed after the entry unparked. Each delayed WorkManager row holds a
+JobScheduler slot until it runs, and WorkManager's in-process scheduler
+reads only the 200 oldest enqueued rows, so enough stale wakes stopped all
+queued work from starting. A parked entry now gets a wake only when it
+expires within 24 hours, and scheduling an entry cancels any wake it no
+longer needs. The boot sweep does this too, so a stuck queue starts again
+on the first launch after the update.
+
 ## 11.0.1
 
 iOS waits two seconds after the app becomes active before replacing

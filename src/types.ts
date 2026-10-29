@@ -106,6 +106,13 @@ export type RequestDescriptor = {
    * entry.
    */
   wifiOnly?: boolean;
+  /**
+   * 'high' lets the request use the transmit slot kept for high priority,
+   * so it does not wait behind a backlog of file parts. Use it for small
+   * requests that other work depends on, such as creating a session.
+   * Default 'normal'. Android only for now; iOS ignores it.
+   */
+  priority?: 'high' | 'normal';
   android?: { noNotification?: boolean };
 };
 
@@ -348,6 +355,19 @@ export interface AddListener {
  */
 export type PauseScope = { keys?: string[] };
 
+/**
+ * One native diagnostic record. `error` is the exception's class and
+ * message. `data` carries structured fields, such as the boot snapshot's
+ * counts.
+ */
+export type Diagnostic = {
+  at: number;
+  level: 'info' | 'warn' | 'error';
+  message: string;
+  error?: string | null;
+  data?: Record<string, unknown> | null;
+};
+
 export type UploadClient = {
   configure: (options: ConfigureOptions) => void;
   define: Define;
@@ -357,6 +377,7 @@ export type UploadClient = {
   setWifiOnly: (enabled: boolean) => Promise<void>;
   updateHeaders: (patch: Record<string, string>) => Promise<void>;
   getRequests: (filter?: { key?: string; id?: string }) => RequestRow[];
+  takeDiagnostics: () => Promise<Diagnostic[]>;
   addListener: AddListener;
   chunkPlan: (
     sizeBytes: number,

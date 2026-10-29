@@ -16,7 +16,8 @@ internal fun desc(
   retry: RetryOverride? = null,
   noNotification: Boolean = false,
   wifiOnly: Boolean? = null,
-) = Descriptor(url, method, headers, dataJson, form, file, parts, accept, retry, noNotification, wifiOnly)
+  highPriority: Boolean = false,
+) = Descriptor(url, method, headers, dataJson, form, file, parts, accept, retry, noNotification, wifiOnly, highPriority)
 
 internal fun part(start: Long, end: Long, accepted: Boolean = false, url: String? = null) = Part(
   url = url ?: "https://example.com/part?start=$start",
@@ -111,6 +112,9 @@ internal class FakeScheduler : WorkScheduler {
   val scheduled = mutableListOf<String>()
   val wakes = mutableListOf<Pair<String, Long>>()
   val cancelled = mutableListOf<String>()
+  val cancelledWakes = mutableListOf<String>()
+  /** What libraryRuns() returns. */
+  val runs = mutableListOf<PendingRun>()
 
   override fun schedule(entry: QueueEntry) {
     scheduled += entry.id
@@ -123,4 +127,10 @@ internal class FakeScheduler : WorkScheduler {
   override fun cancel(id: String) {
     cancelled += id
   }
+
+  override fun cancelWake(id: String) {
+    cancelledWakes += id
+  }
+
+  override fun libraryRuns(): List<PendingRun> = runs.toList()
 }

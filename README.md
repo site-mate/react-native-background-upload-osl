@@ -71,6 +71,9 @@ request, and lets it be dropped cleanly if upstream accepts an equivalent fix.
 | Sweep staged bodies no entry claims at iOS relaunch | `v11.0.1-sm.1` | A kill between staging a chunked upload's body and committing its entry left a full-size file in the app's container that nothing would ever reclaim. |
 | Android: socket timeouts a slow link survives; foreground quota denial covered | `v11.0.1-sm.2` | OkHttp's 10 s read timeout failed every part of a large upload on a throttled link, and each part restarted forever. Those retries then used up Android 15's daily `dataSync` foreground allowance. |
 
+"Since" is the tag a patch first shipped in. Both are carried forward onto every
+later upstream base; the current base is `v11.1.0`.
+
 # Installation
 
 **Requires React Native ≥ 0.84 with the New Architecture enabled, and React ≥ 19.**
@@ -195,6 +198,7 @@ TypeScript does not flag a misspelled key on an inferred arrow return.
 | `expiresAt` | Epoch ms. Default now + `lifetimeMs` (14 days). Past it: `error` with `errorKind: 'expired'`. |
 | `retry` | Per-request override of the `configure()` retry defaults. |
 | `wifiOnly` | `true` waits for Wi-Fi before each attempt; `false` never waits. Overrides `setWifiOnly()` for this entry. Omit it to follow `setWifiOnly()`, including later toggles. |
+| `priority` | `'high'` or `'normal'` (default). On Android at most 4 requests transmit at once, and one of those slots is kept for `'high'`. Normal requests can use only the other 3, so a high-priority request, such as a small JSON POST that creates a session, gets a slot without waiting behind a backlog of file parts. It can still wait when other high-priority requests hold every slot. iOS ignores it for now. |
 | `android` | `{ noNotification?: boolean }`. See Silent uploads. |
 
 `vars` and `data` cross to native as JSON strings, and native parses them.
@@ -526,6 +530,25 @@ uploads
   .filter((row) => (row.vars as { captureId?: string }).captureId === captureId)
   .forEach((row) => uploads.cancel(row.id));
 ```
+
+### `takeDiagnostics(): Promise<Diagnostic[]>`
+The library's persisted diagnostic records, oldest first. Each call returns
+the records since the last call and clears them, so send them somewhere
+they can be seen, such as an error tracker, once per launch. A record is
+`{ at, level, message, error?, data? }`, with `level` one of `info`, `warn`
+or `error`. `error` is the exception's class and message.
+
+Android keeps the newest 50 records. They are the module's warnings and
+errors, including those from background runs that had no JS, and one `info`
+record each time the module starts and finds queued or parked entries or
+WorkManager runs. That is once per launch, plus once per JS reload. The
+record's `data` counts the entries the start schedules, by state and by key,
+and gives the oldest `updatedAt` among them, all as the start found them: an
+entry that was running when its process died counts as running. It also
+describes every unfinished WorkManager run the library had before the start
+changed them: the count by state, how many are delayed wakes, how many of
+those are due more than 24 hours out, the highest run attempt count, and how
+many queued or running entries had no run at all. iOS returns an empty list.
 
 ### `chunkPlan(sizeBytes, { min?, max? }): Array<{ start, end }>`
 Splits a byte count into contiguous, end-exclusive ranges: a deterministic

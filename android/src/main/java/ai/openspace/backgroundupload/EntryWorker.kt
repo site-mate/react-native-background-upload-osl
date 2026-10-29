@@ -9,7 +9,6 @@ import androidx.work.WorkerParameters
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 /**
@@ -53,6 +52,8 @@ open class EntryWorker(protected val context: Context, params: WorkerParameters)
 
   final override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
     val id = inputData.getString(WorkManagerScheduler.ENTRY_ID_KEY) ?: return@withContext Result.success()
+    // A headless run has no module, so it opens the log that its Diag calls write to.
+    DiagnosticLog.get(context)
     // Acquire before the first store read: a cancel-then-enqueue can start
     // this run while the old one still winds down.
     while (!WorkerGate.tryAcquire(id, this@EntryWorker)) delay(GATE_POLL_MS)
@@ -77,7 +78,7 @@ open class EntryWorker(protected val context: Context, params: WorkerParameters)
     override suspend fun sleep(ms: Long) = delay(ms)
 
     override suspend fun send(request: TransferRequest, onProgress: (Long) -> Unit): UploadResponse =
-      transferSemaphore.withPermit { okhttpSend(uploadHttpClient, request, onProgress) }
+      transferGate.withPermit(request.highPriority) { okhttpSend(uploadHttpClient, request, onProgress) }
 
     override fun connectivity(wifiOnly: Boolean): Connectivity {
       connectivity = validateConnectivity(context, wifiOnly)

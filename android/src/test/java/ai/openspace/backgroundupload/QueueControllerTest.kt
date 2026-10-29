@@ -7,6 +7,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -36,6 +37,11 @@ class QueueControllerTest {
     settings = QueueSettingsStore(File(root, "settings.json"))
     controller = QueueController(store, journal, settings, events, scheduler, { it in running }, { now })
     journal.drain(listener) // JS is subscribed
+  }
+
+  @After
+  fun tearDown() {
+    Diag.log = null
   }
 
   private fun source(name: String, size: Int) = File(tmp.newFolder(), name).apply { writeBytes(ByteArray(size) { it.toByte() }) }
@@ -550,7 +556,9 @@ class QueueControllerTest {
     assertEquals(EntryState.AWAITING_AUTH, store.load("a")!!.state)
     assertEquals(EntryState.QUEUED, store.load("s")!!.state)
     assertTrue(scheduler.scheduled.containsAll(listOf("q", "r", "s")))
-    assertEquals(listOf("a" to FAR_FUTURE), scheduler.wakes) // the parked one waits for its expiry
+    // The parked one waits for its expiry, which is too far ahead for a wake.
+    assertEquals(emptyList<Pair<String, Long>>(), scheduler.wakes)
+    assertTrue("a" in scheduler.cancelledWakes)
   }
 
   @Test
@@ -647,9 +655,32 @@ class QueueControllerTest {
   }
 
   @Test
+  fun `same body with a new priority resumes with that priority`() {
+    controller.enqueue(parsed(id = "s", descriptor = desc(dataJson = """{"a":1}""")))
+    controller.enqueue(parsed(id = "s", descriptor = desc(dataJson = """{"a":1}""", highPriority = true)))
+    assertTrue(store.load("s")!!.descriptor!!.highPriority)
+  }
+
+  @Test
   fun `setWifiOnly persists`() {
     controller.setWifiOnly(true)
     assertTrue(QueueSettingsStore(File(root, "settings.json")).load().wifiOnly)
+  }
+
+  @Test
+  fun `updateHeaders cancels the expiry wake of the entries it unparks`() {
+    store.save(entry(id = "p", state = EntryState.AWAITING_AUTH, parkedGeneration = 0))
+    controller.updateHeaders(mapOf("Authorization" to "Bearer new"))
+    assertEquals(listOf("p"), scheduler.cancelledWakes)
+    assertEquals(listOf("p"), scheduler.scheduled)
+  }
+
+  @Test
+  fun `updateHeaders leaves the wake of an entry whose worker runs in this process`() {
+    store.save(entry(id = "p", state = EntryState.AWAITING_AUTH, parkedGeneration = 0))
+    running += "p"
+    controller.updateHeaders(mapOf("Authorization" to "Bearer new"))
+    assertEquals(emptyList<String>(), scheduler.cancelledWakes)
   }
 
   @Test
@@ -800,6 +831,20 @@ class QueueControllerTest {
   }
 
   @Test
+  fun `sweep cancels the stale wakes of due work and of a parked entry with a far expiry`() {
+    store.save(entry(id = "q", state = EntryState.QUEUED))
+    store.save(entry(id = "w", state = EntryState.QUEUED, nextAttemptAt = now + 3_600_000))
+    store.save(entry(id = "far", state = EntryState.AWAITING_AUTH, expiresAt = FAR_FUTURE))
+    store.save(entry(id = "near", state = EntryState.AWAITING_AUTH, expiresAt = now + EXPIRY_WAKE_HORIZON_MS))
+    controller.sweep()
+    assertEquals(setOf("q", "far"), scheduler.cancelledWakes.toSet())
+    assertEquals(
+      setOf("w" to now + 3_600_000, "near" to now + EXPIRY_WAKE_HORIZON_MS),
+      scheduler.wakes.toSet(),
+    )
+  }
+
+  @Test
   fun `sweep skips an entry whose worker runs in this process`() {
     store.save(entry(state = EntryState.RUNNING))
     journal.append(record("00000000-0000-0000-0000-000000000012"))
@@ -880,5 +925,68 @@ class QueueControllerTest {
     assertEquals(EntryState.QUEUED, store.load("n")!!.state)
     assertEquals(EntryState.QUEUED, store.load("v")!!.state)
     assertEquals(setOf("n", "v"), scheduler.scheduled.toSet())
+  }
+
+  @Test
+  fun `sweep records the entries it schedules and what WorkManager held before`() {
+    val file = File(tmp.newFolder(), "diagnostics.json")
+    Diag.log = DiagnosticLog(file)
+    store.save(entry(id = "a", key = "capture.file", createdAt = 500))
+    store.save(entry(id = "b", key = "capture.session.create", createdAt = 900))
+    store.save(entry(id = "p", state = EntryState.AWAITING_AUTH, expiresAt = FAR_FUTURE))
+    // A stale 10-year wake of "a", and a main-chain run of "a" retried 7 times. "b" has none.
+    scheduler.runs += PendingRun("a", "ENQUEUED", 0, FAR_FUTURE, delayed = true)
+    scheduler.runs += PendingRun("a", "ENQUEUED", 7, now + 60_000, delayed = false)
+    scheduler.runs += PendingRun("p", "ENQUEUED", 0, now + 1_000, delayed = true)
+    controller.sweep()
+    val record = DiagnosticLog(file).drain().single()
+    assertEquals(DiagnosticLog.INFO, record.level)
+    assertEquals(BootSnapshot.MESSAGE, record.message)
+    // Read back from the JSON file, as the next launch does, so its numbers are doubles.
+    val data = record.data!!
+    assertEquals(3.0, data["entries"])
+    assertEquals(mapOf("queued" to 2.0, "awaiting-auth" to 1.0), data["entriesByState"])
+    assertEquals(mapOf("capture.file" to 1.0, "capture.session.create" to 1.0, "note" to 1.0), data["entriesByKey"])
+    assertEquals(500.0, data["oldestUpdatedAt"])
+    assertEquals(1.0, data["entriesWithoutRun"])
+    assertEquals(3.0, data["runs"])
+    assertEquals(mapOf("ENQUEUED" to 3.0), data["runsByState"])
+    assertEquals(2.0, data["delayedRuns"])
+    assertEquals(1.0, data["delayedPastHorizon"])
+    assertEquals(7.0, data["maxRunAttemptCount"])
+  }
+
+  @Test
+  fun `sweep records an entry that was running as it found it`() {
+    val file = File(tmp.newFolder(), "diagnostics.json")
+    Diag.log = DiagnosticLog(file)
+    store.save(entry(id = "r", state = EntryState.RUNNING, createdAt = 500))
+    controller.sweep()
+    val data = DiagnosticLog(file).drain().single().data!!
+    assertEquals(mapOf("running" to 1.0), data["entriesByState"])
+    assertEquals(500.0, data["oldestUpdatedAt"])
+    assertEquals(1.0, data["entriesWithoutRun"])
+    assertEquals(EntryState.QUEUED, store.load("r")!!.state)
+  }
+
+  @Test
+  fun `sweep records stale runs even when no entry is left to schedule`() {
+    val file = File(tmp.newFolder(), "diagnostics.json")
+    Diag.log = DiagnosticLog(file)
+    scheduler.runs += PendingRun("gone", "ENQUEUED", 0, FAR_FUTURE, delayed = true)
+    controller.sweep()
+    val data = DiagnosticLog(file).drain().single().data!!
+    assertEquals(0.0, data["entries"])
+    assertEquals(1.0, data["delayedPastHorizon"])
+  }
+
+  @Test
+  fun `sweep records nothing when there is no entry and no run`() {
+    val file = File(tmp.newFolder(), "diagnostics.json")
+    Diag.log = DiagnosticLog(file)
+    store.save(entry(state = EntryState.PAUSED))
+    controller.pause()
+    controller.sweep()
+    assertEquals(emptyList<DiagnosticLog.Record>(), DiagnosticLog(file).drain())
   }
 }

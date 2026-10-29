@@ -10,6 +10,20 @@ import androidx.work.workDataOf
 import java.util.concurrent.TimeUnit
 
 /**
+ * How far ahead a parked entry's expiry wake may be scheduled. A delayed
+ * WorkManager row holds one of the app's JobScheduler slots (20 by default)
+ * until it runs, and WorkManager's in-process scheduler reads only the 200
+ * oldest enqueued rows. Wakes years ahead, from long-lived requests that
+ * parked, filled both, so no other work started. An entry that expires past
+ * this horizon gets its wake from a later boot sweep, and settles at the
+ * first launch after it expires at the latest.
+ */
+const val EXPIRY_WAKE_HORIZON_MS = 24L * 60 * 60 * 1000
+
+/** Whether an expiry wake at [expiresAt] is near enough to schedule now. */
+fun expiryWakeIsNear(expiresAt: Long, now: Long): Boolean = expiresAt - now <= EXPIRY_WAKE_HORIZON_MS
+
+/**
  * Starts and stops worker runs for entries. A run only carries the entry id;
  * the worker reads everything else from the store. So an extra run is always
  * harmless: it finds nothing to do and exits.
@@ -27,7 +41,26 @@ interface WorkScheduler {
 
   /** Cancels the main chain and the wake. */
   fun cancel(id: String)
+
+  /** Cancels the wake only. A wake that is no longer needed still holds a WorkManager slot. */
+  fun cancelWake(id: String)
+
+  /** Every unfinished WorkManager run of the library, main chains and wakes. For the boot snapshot. */
+  fun libraryRuns(): List<PendingRun>
 }
+
+/**
+ * One unfinished WorkManager run. [entryId] comes from the run's id tag.
+ * [delayed] is a run enqueued with an initial delay, which only a wake has.
+ * [nextScheduleAt] is null when WorkManager reports none.
+ */
+data class PendingRun(
+  val entryId: String?,
+  val state: String,
+  val runAttemptCount: Int,
+  val nextScheduleAt: Long?,
+  val delayed: Boolean,
+)
 
 /**
  * WorkManager unique work per entry id, APPEND_OR_REPLACE, as v9.
@@ -89,6 +122,28 @@ class WorkManagerScheduler(context: Context) : WorkScheduler {
     workManager.cancelUniqueWork(id)
     workManager.cancelUniqueWork(wakeName(id))
   }
+
+  // A cancel reschedules all pending work even when the name has none, and
+  // the boot sweep calls this for every queued entry.
+  override fun cancelWake(id: String) {
+    val states = workManager.getWorkInfosForUniqueWork(wakeName(id)).get().map { it.state }
+    if (states.any { !it.isFinished }) workManager.cancelUniqueWork(wakeName(id))
+  }
+
+  // One query for every row, not one per entry: the boot sweep runs this on
+  // the queue's only thread.
+  override fun libraryRuns(): List<PendingRun> =
+    workManager.getWorkInfosByTag(WORK_TAG).get()
+      .filter { !it.state.isFinished }
+      .map { info ->
+        PendingRun(
+          entryId = info.tags.firstOrNull { it.startsWith(ID_TAG_PREFIX) }?.removePrefix(ID_TAG_PREFIX),
+          state = info.state.name,
+          runAttemptCount = info.runAttemptCount,
+          nextScheduleAt = info.nextScheduleTimeMillis.takeIf { it != Long.MAX_VALUE },
+          delayed = info.initialDelayMillis > 0,
+        )
+      }
 
   /** First v10 launch: the v9 rows. Their workers are gone. */
   fun cancelV9Work() {
